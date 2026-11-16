@@ -26,6 +26,7 @@ const menu: { title: string; items: Item[] }[] = [
       { href: "/panel/tedarikciler", label: "Tedarikçiler", icon: "truck", feature: "tedarikci" },
       { href: "/panel/site", label: "Web sitem", icon: "globe" },
       { href: "/panel/raporlar", label: "Raporlar", icon: "chart", feature: "rapor" },
+      { href: "/panel/ozet", label: "Aylık özet", icon: "chart" },
     ],
   },
   {
@@ -73,6 +74,7 @@ const titles: Record<string, string> = {
   "/panel/masraflar": "Masraflar",
   "/panel/site": "Web sitem",
   "/panel/raporlar": "Raporlar",
+  "/panel/ozet": "Aylık özet",
   "/panel/hesap": "Hesabım",
   "/panel/ayarlar": "Ayarlar",
   "/panel/duyurular": "Duyurular",
@@ -96,6 +98,7 @@ const activeLabel: Record<string, string> = {
   "/panel/masraflar": "Masraflar",
   "/panel/site": "Web sitem",
   "/panel/raporlar": "Raporlar",
+  "/panel/ozet": "Aylık özet",
   "/panel/duyurular": "Duyurular",
   "/panel/bildirimler": "Bildirimler",
   "/panel/destek": "Destek ve yardım",
