@@ -452,4 +452,15 @@ export async function ensureSchema() {
       created_at timestamptz not null default now()
     )
   `);
+  await query("alter table shop_settings add column if not exists site_enabled boolean not null default true");
+  await query("alter table shop_settings add column if not exists theme_color text not null default '#f97316'");
+  await query("alter table shop_settings add column if not exists seo_title text not null default ''");
+  await query("alter table shop_settings add column if not exists seo_description text not null default ''");
+  await query("alter table shop_settings add column if not exists cover_path text not null default ''");
+  await query("alter table shop_settings add column if not exists public_phone text not null default ''");
+  await query("alter table shop_settings add column if not exists whatsapp_number text not null default ''");
+  await query("alter table shop_settings add column if not exists instagram_url text not null default ''");
+  await query("alter table shop_settings add column if not exists facebook_url text not null default ''");
+  await query("alter table products add column if not exists show_on_site boolean not null default true");
+  await query("create unique index if not exists shop_settings_public_slug_idx on shop_settings (public_slug)");
 }

@@ -29,6 +29,8 @@ export type Product = {
   name: string;
   price_label: string;
   in_stock: boolean;
+  price_kurus: number;
+  show_on_site: boolean;
 };
 
 export type Conversation = {
@@ -134,13 +136,22 @@ export type ShopSettings = {
   notify_expense: boolean;
   notify_credit: boolean;
   notify_subscription: boolean;
+  site_enabled: boolean;
+  theme_color: string;
+  seo_title: string;
+  seo_description: string;
+  cover_path: string;
+  public_phone: string;
+  whatsapp_number: string;
+  instagram_url: string;
+  facebook_url: string;
 };
 
 export type Staff = { id: string; name: string; available: boolean };
 export type Invoice = { id: string; period_label: string; amount_label: string; status: string };
 export type Campaign = { id: string; body: string; recipient_count: number; created_at: string };
 
-function slugify(value: string) {
+export function slugify(value: string) {
   return (
     value
       .toLowerCase()
@@ -153,6 +164,19 @@ function slugify(value: string) {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || "dukkan"
   );
+}
+
+export async function allocatePublicSlug(base: string, userId?: string) {
+  const root = slugify(base);
+  let candidate = root;
+  let n = 2;
+  while (n < 1000) {
+    const rows = await query<{ user_id: string }>("select user_id from shop_settings where public_slug = $1", [candidate]);
+    if (!rows[0] || rows[0].user_id === userId) return candidate;
+    candidate = `${root}-${n}`;
+    n += 1;
+  }
+  return `${root}-${Date.now().toString(36)}`;
 }
 
 export function startOfDay(offset = 0) {
@@ -188,9 +212,9 @@ export async function preparePanel(user: SessionUser) {
   await removeAutomaticCreditPeriodExpenses(user.id);
   await postRecurringMasraflar(user.id);
 
-  const slug = slugify(user.business_name);
   const existing = await query<{ user_id: string }>("select user_id from shop_settings where user_id = $1", [user.id]);
   if (!existing[0]) {
+    const slug = await allocatePublicSlug(slugify(user.business_name));
     await query("insert into shop_settings (user_id, public_slug, card_label) values ($1, $2, '')", [user.id, slug]);
   }
 }
@@ -521,7 +545,8 @@ export async function getSettings(userId: string) {
   const rows = await query<ShopSettings>(
     `select open_time, close_time, closed_days, reminder_whatsapp, reminder_sms, card_label,
             headline, about, price_note, campaign, public_slug, address, bank_info, logo_path,
-            tax_office, tax_number, notify_appointment, notify_money, notify_expense, notify_credit, notify_subscription
+            tax_office, tax_number, notify_appointment, notify_money, notify_expense, notify_credit, notify_subscription,
+            site_enabled, theme_color, seo_title, seo_description, cover_path, public_phone, whatsapp_number, instagram_url, facebook_url
      from shop_settings where user_id = $1`,
     [userId],
   );
@@ -533,7 +558,16 @@ export async function listStaff(userId: string) {
 }
 
 export async function listProducts(userId: string) {
-  return query<Product>("select id, name, price_label, in_stock from products where user_id = $1 order by name", [userId]);
+  const rows = await query<Product & { price_kurus: number | string; show_on_site: boolean }>(
+    "select id, name, price_label, in_stock, price_kurus, show_on_site from products where user_id = $1 order by name",
+    [userId],
+  );
+  return rows.map((row) => ({
+    ...row,
+    in_stock: Boolean(row.in_stock),
+    price_kurus: Number(row.price_kurus ?? 0),
+    show_on_site: row.show_on_site !== false,
+  }));
 }
 
 export async function listConversations(userId: string) {

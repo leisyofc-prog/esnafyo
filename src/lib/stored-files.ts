@@ -6,6 +6,10 @@ export function shopLogoFileId(userId: string) {
   return `shop-logo:${userId}`;
 }
 
+export function shopCoverFileId(userId: string) {
+  return `shop-cover:${userId}`;
+}
+
 export function customerPhotoFileId(userId: string, customerId: string) {
   return `customer-photo:${userId}:${customerId}`;
 }
