@@ -564,8 +564,16 @@ function shiftDue(iso: string, months: number) {
 export async function deleteLedger(formData: FormData) {
   const id = await userId();
   const entryId = String(formData.get("id") ?? "");
-  const rows = await query<{ kind: string; amount_kurus: number | string; account_id: string | null; credit_id: string | null; credit_payment: string | null }>(
-    "select kind, amount_kurus, account_id, credit_id, credit_payment from ledger where id = $1 and user_id = $2",
+  const rows = await query<{
+    kind: string;
+    amount_kurus: number | string;
+    account_id: string | null;
+    credit_id: string | null;
+    credit_payment: string | null;
+    happened_on: string | Date;
+    created_at: string | Date;
+  }>(
+    "select kind, amount_kurus, account_id, credit_id, credit_payment, happened_on, created_at from ledger where id = $1 and user_id = $2",
     [entryId, id],
   );
   const entry = rows[0];
@@ -576,20 +584,8 @@ export async function deleteLedger(formData: FormData) {
     const delta = entry.kind === "gelir" ? -amount : amount;
     await query("update finance_accounts set balance_kurus = balance_kurus + $1 where id = $2 and user_id = $3", [delta, entry.account_id, id]);
   }
-  if (entry.credit_id && entry.kind === "gider" && entry.credit_payment !== "donem") {
-    const amount = Number(entry.amount_kurus);
-    await query("update credits set remaining_kurus = remaining_kurus + $1 where id = $2 and user_id = $3", [amount, entry.credit_id, id]);
-    const credit = await query<{ remaining_kurus: number | string; period_kurus: number | string | null }>(
-      "select remaining_kurus, period_kurus from credits where id = $1 and user_id = $2",
-      [entry.credit_id, id],
-    );
-    if (credit[0]) {
-      const cycle = creditCycle(Number(credit[0].period_kurus ?? 0), Number(credit[0].remaining_kurus));
-      await query(
-        "update credits set remaining_installments = $1, minimum_kurus = $2 where id = $3 and user_id = $4",
-        [cycle.months, cycle.minimum, entry.credit_id, id],
-      );
-    }
+  if (entry.credit_id && entry.kind === "gider") {
+    await undoCreditPayment(id, entry.credit_id, Number(entry.amount_kurus), entry.credit_payment, entry.happened_on, entry.created_at);
     refresh("/panel/krediler");
   }
   await record(id, "gelir", "Kaydı sildi", `${entry.kind} · ${(Number(entry.amount_kurus) / 100).toLocaleString("tr-TR")} TL`);
@@ -597,6 +593,49 @@ export async function deleteLedger(formData: FormData) {
   refresh("/panel/gider");
   refresh("/panel/hesaplarim");
   if (entry.account_id) refresh(`/panel/hesaplarim/${entry.account_id}`);
+}
+
+async function undoCreditPayment(
+  userId: string,
+  creditId: string,
+  amount: number,
+  paymentKind: string | null,
+  happenedOn: string | Date,
+  createdAt: string | Date,
+) {
+  // Auto-posted period rows never changed the credit balance; only explicit Ödedim / Asgari ödedim do.
+  if (paymentKind === "donem") return;
+  if (paymentKind !== "taksit" && paymentKind !== "asgari") return;
+  const credit = await query<{
+    remaining_kurus: number | string;
+    period_kurus: number | string | null;
+    next_due: string | Date;
+    schedule: string;
+  }>(
+    "select remaining_kurus, period_kurus, next_due, schedule from credits where id = $1 and user_id = $2",
+    [creditId, userId],
+  );
+  if (!credit[0]) return;
+  const remaining = Number(credit[0].remaining_kurus) + amount;
+  const cycle = creditCycle(Number(credit[0].period_kurus ?? 0), remaining);
+  let nextDue = dueKey(credit[0].next_due);
+  if (paymentKind === "taksit") {
+    const months = creditSchedules[credit[0].schedule];
+    if (months) {
+      const later = await query<{ id: string }>(
+        `select id from ledger
+         where user_id = $1 and credit_id = $2 and kind = 'gider' and credit_payment = 'taksit'
+           and (happened_on > $3 or (happened_on = $3 and created_at > $4))
+         limit 1`,
+        [userId, creditId, dueKey(happenedOn), createdAt],
+      );
+      if (!later[0]) nextDue = shiftDue(nextDue, -months);
+    }
+  }
+  await query(
+    "update credits set remaining_kurus = $1, remaining_installments = $2, minimum_kurus = $3, next_due = $4 where id = $5 and user_id = $6",
+    [remaining, cycle.months, cycle.minimum, nextDue, creditId, userId],
+  );
 }
 
 export async function changePackage(formData: FormData) {
