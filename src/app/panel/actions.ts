@@ -1,12 +1,11 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
+import { MAX_STORED_FILE_BYTES, customerPhotoFileId, deleteStoredFile, putStoredFile, shopLogoFileId } from "@/lib/stored-files";
 import { currencies, normalizeCurrency } from "@/lib/currencies";
 import { masrafCategories } from "@/lib/masraf-categories";
 import { requireFeature } from "@/lib/plan-guard";
@@ -658,15 +657,11 @@ export async function saveWorkplace(formData: FormData) {
   await query("update users set business_name = $1, phone = $2 where id = $3", [business, phone, id]);
   await query("update shop_settings set address = $1, bank_info = $2 where user_id = $3", [address, bank, id]);
   const file = formData.get("logo");
-  if (file instanceof File && file.size > 0 && ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 2_000_000) {
+  if (file instanceof File && file.size > 0 && ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= MAX_STORED_FILE_BYTES) {
     const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
     const filename = `logo.${ext}`;
-    const dir = path.join(process.cwd(), ".data", "shop-logos", id);
-    await mkdir(dir, { recursive: true });
-    const existing = await readdir(dir).catch(() => []);
-    await Promise.all(existing.filter((name) => name.startsWith("logo.")).map((name) => unlink(path.join(dir, name)).catch(() => undefined)));
-    await writeFile(path.join(dir, filename), Buffer.from(await file.arrayBuffer()));
-    await query("update shop_settings set logo_path = $1 where user_id = $2", [filename, id]);
+    const saved = await putStoredFile(shopLogoFileId(id), id, file.type, new Uint8Array(await file.arrayBuffer()));
+    if (saved.ok) await query("update shop_settings set logo_path = $1 where user_id = $2", [filename, id]);
   }
   refresh("/panel/hesap");
 }
@@ -756,10 +751,6 @@ function parseBranches(value: string) {
   }
 }
 
-function photoDir(user: string) {
-  return path.join(process.cwd(), ".data", "customer-photos", user);
-}
-
 async function saveCustomerImage(user: string, customerId: string, formData: FormData) {
   if (formData.get("remove_image") === "on") {
     await query("update customers set image_path = '' where id = $1 and user_id = $2", [customerId, user]);
@@ -767,24 +758,16 @@ async function saveCustomerImage(user: string, customerId: string, formData: For
   }
   const file = formData.get("image");
   if (!(file instanceof File) || file.size === 0) return;
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 2_000_000) return;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > MAX_STORED_FILE_BYTES) return;
   const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
   const filename = `${customerId}.${ext}`;
-  const dir = photoDir(user);
-  await mkdir(dir, { recursive: true });
-  await removeCustomerPhotos(user, customerId);
-  await writeFile(path.join(dir, filename), Buffer.from(await file.arrayBuffer()));
+  const saved = await putStoredFile(customerPhotoFileId(user, customerId), user, file.type, new Uint8Array(await file.arrayBuffer()));
+  if (!saved.ok) return;
   await query("update customers set image_path = $1 where id = $2 and user_id = $3", [filename, customerId, user]);
 }
 
 async function removeCustomerPhotos(user: string, customerId: string) {
-  const dir = photoDir(user);
-  const files = await readdir(dir).catch(() => []);
-  await Promise.all(
-    files
-      .filter((file) => file.startsWith(`${customerId}.`))
-      .map((file) => unlink(path.join(dir, file)).catch(() => undefined)),
-  );
+  await deleteStoredFile(customerPhotoFileId(user, customerId), user);
 }
 
 type SaleLineInput = { name?: unknown; qty?: unknown; price?: unknown; vat?: unknown };
