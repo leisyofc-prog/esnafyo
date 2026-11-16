@@ -54,6 +54,7 @@ export default async function CreditsPage() {
         accountName: item.accountName,
         accountId: item.accountId,
         note: item.note,
+        lastPaymentId: item.lastPaymentId,
         closed: item.remainingKurus <= 0 || cycle.months <= 0,
       };
       })}
