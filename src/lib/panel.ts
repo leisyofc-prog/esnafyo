@@ -185,7 +185,7 @@ export async function preparePanel(user: SessionUser) {
   await undoAutomaticCreditPayments(user.id);
   await restoreUnpaidCreditCycle(user.id);
   await syncCreditCycles(user.id);
-  await postCreditPeriodExpenses(user.id);
+  await removeAutomaticCreditPeriodExpenses(user.id);
   await postRecurringMasraflar(user.id);
 
   const slug = slugify(user.business_name);
@@ -277,53 +277,23 @@ async function syncCreditCycles(userId: string) {
   }
 }
 
-async function postCreditPeriodExpenses(userId: string) {
-  const credits = await query<{
-    id: string;
-    name: string;
-    account_id: string;
-    period_kurus: number | string | null;
-    remaining_kurus: number | string;
-    next_due: string | Date;
-  }>(
-    "select id, name, account_id, period_kurus, remaining_kurus, next_due from credits where user_id = $1",
+async function removeAutomaticCreditPeriodExpenses(userId: string) {
+  const done = await query<{ flag: string }>(
+    "select flag from user_flags where user_id = $1 and flag = 'remove-auto-credit-period-expenses'",
     [userId],
   );
-  const month = localKey(new Date()).slice(0, 7);
-  const monthStart = `${month}-01`;
-  const monthEnd = nextMonthStart(month);
-  for (const credit of credits) {
-    const amount = creditCycle(Number(credit.period_kurus ?? 0), Number(credit.remaining_kurus)).minimum;
-    if (amount <= 0) continue;
-    const existing = await query<{ id: string; amount_kurus: number | string }>(
-      `select id, amount_kurus from ledger
-       where user_id = $1 and credit_id = $2 and credit_payment = 'donem' and happened_on >= $3 and happened_on < $4
-       limit 1`,
-      [userId, credit.id, monthStart, monthEnd],
-    );
-    if (existing[0]) {
-      const posted = Number(existing[0].amount_kurus);
-      if (posted !== amount) {
-        await query("update ledger set amount_kurus = $1, title = $2 where id = $3 and user_id = $4", [amount, `Asgari: ${credit.name}`, existing[0].id, userId]);
-        await query("update finance_accounts set balance_kurus = balance_kurus + $1 where id = $2 and user_id = $3", [posted - amount, credit.account_id, userId]);
-      }
-      continue;
+  if (done[0]) return;
+  const rows = await query<{ id: string; account_id: string | null; amount_kurus: number | string; kind: string }>(
+    "select id, account_id, amount_kurus, kind from ledger where user_id = $1 and credit_payment = 'donem'",
+    [userId],
+  );
+  for (const row of rows) {
+    if (row.account_id && row.kind === "gider") {
+      await query("update finance_accounts set balance_kurus = balance_kurus + $1 where id = $2 and user_id = $3", [Number(row.amount_kurus), row.account_id, userId]);
     }
-    const dueDay = Number(calendarKey(credit.next_due).slice(8, 10)) || 1;
-    const happened = `${month}-${String(Math.min(Math.max(dueDay, 1), 28)).padStart(2, "0")}`;
-    await query(
-      `insert into ledger (id, user_id, kind, title, amount_kurus, happened_on, account_id, credit_id, credit_payment)
-       values ($1,$2,'gider',$3,$4,$5,$6,$7,'donem')`,
-      [randomUUID(), userId, `Asgari: ${credit.name}`, amount, happened, credit.account_id, credit.id],
-    );
-    await query("update finance_accounts set balance_kurus = balance_kurus - $1 where id = $2 and user_id = $3", [amount, credit.account_id, userId]);
-    await writeActivity({
-      userId,
-      area: "kredi",
-      action: "Aylık asgari gideri yazıldı",
-      detail: `${credit.name} · ${(amount / 100).toLocaleString("tr-TR")} TL`,
-    });
+    await query("delete from ledger where id = $1 and user_id = $2", [row.id, userId]);
   }
+  await query("insert into user_flags (user_id, flag) values ($1, 'remove-auto-credit-period-expenses')", [userId]);
 }
 
 function shiftCreditDue(iso: string, months: number) {
@@ -644,6 +614,7 @@ export type Credit = {
   note: string;
   minimumKurus: number | null;
   periodKurus: number;
+  lastPaymentId: string | null;
 };
 
 export async function listCredits(userId: string): Promise<Credit[]> {
@@ -671,6 +642,16 @@ export async function listCredits(userId: string): Promise<Credit[]> {
      order by credits.next_due`,
     [userId],
   );
+  const payments = rows.length
+    ? await query<{ id: string; credit_id: string }>(
+        `select distinct on (credit_id) id, credit_id
+         from ledger
+         where user_id = $1 and credit_id is not null and kind = 'gider' and credit_payment in ('taksit', 'asgari')
+         order by credit_id, happened_on desc, created_at desc`,
+        [userId],
+      )
+    : [];
+  const lastPayment = new Map(payments.map((row) => [row.credit_id, row.id]));
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -685,6 +666,7 @@ export async function listCredits(userId: string): Promise<Credit[]> {
     note: row.note,
     minimumKurus: row.minimum_kurus == null ? null : Number(row.minimum_kurus),
     periodKurus: Number(row.period_kurus ?? row.remaining_kurus),
+    lastPaymentId: lastPayment.get(row.id) ?? null,
   }));
 }
 
