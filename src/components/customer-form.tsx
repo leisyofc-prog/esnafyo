@@ -53,7 +53,7 @@ export function CustomerForm({ customer, branches, staff }: { customer: Customer
           <Field label="İsmi / Unvanı">
             <input name="name" required defaultValue={customer?.name} className={input} />
           </Field>
-          <Field label="Resim Ekle">
+          <Field label="Resim Ekle" hint="JPEG, PNG veya WebP. En fazla 10 MB.">
             <input name="image" type="file" accept="image/jpeg,image/png,image/webp" className="block w-full text-[13px]" />
             {customer?.image ? (
               <span className="mt-2 flex items-center gap-3">

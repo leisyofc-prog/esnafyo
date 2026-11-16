@@ -130,6 +130,7 @@ export function AccountTabs({
             </label>
             <label className="text-[13px] font-semibold">Logo
               <input name="logo" type="file" accept="image/jpeg,image/png,image/webp" className="mt-1 block w-full font-normal" />
+              <span className="mt-1 block text-[12px] font-normal text-[#98a2b3]">JPEG, PNG veya WebP. En fazla 10 MB.</span>
             </label>
             {hasLogo ? (
               // eslint-disable-next-line @next/next/no-img-element
