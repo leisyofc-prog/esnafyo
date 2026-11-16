@@ -4,6 +4,8 @@ import { guardFeature } from "@/lib/plan-guard";
 import { listCredits, listFinanceAccounts } from "@/lib/panel";
 import { creditCycle } from "@/lib/credit-cycle";
 import { CreditsBoard } from "@/components/credits-board";
+import { formatMoney } from "@/lib/panel";
+import { loadMonthlyAsgariSummary, parseSummaryMonth } from "@/lib/monthly-summary";
 
 export const instant = false;
 
@@ -26,9 +28,20 @@ export default async function CreditsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
   guardFeature(user.package_name, "kredi");
-  const [credits, accounts] = await Promise.all([listCredits(user.id), listFinanceAccounts(user.id)]);
+  const current = parseSummaryMonth(undefined);
+  const [credits, accounts, asgari] = await Promise.all([
+    listCredits(user.id),
+    listFinanceAccounts(user.id),
+    loadMonthlyAsgariSummary(user.id, current.year, current.month),
+  ]);
 
   return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-[#fed7aa] bg-[#fff7ed] p-4">
+        <p className="text-[12px] font-semibold text-[#9a3412]">Bu ay toplam asgari</p>
+        <p className="mt-1 text-[22px] font-semibold text-[#c2410c]">{formatMoney(asgari.dueKurus)}</p>
+        <p className="mt-1 text-[13px] text-[#9a3412]">Ödenen {formatMoney(asgari.paidKurus)} · Kalan {formatMoney(asgari.remainingKurus)}</p>
+      </section>
     <CreditsBoard
       today={istanbulDateKey()}
       accounts={accounts.map((item) => ({ id: item.id, name: item.name, currency: item.currency }))}
@@ -61,6 +74,7 @@ export default async function CreditsPage() {
       };
       })}
     />
+    </div>
   );
 }
 
