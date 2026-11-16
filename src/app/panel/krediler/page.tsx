@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { guardFeature } from "@/lib/plan-guard";
-import { listCredits, listFinanceAccounts, localKey } from "@/lib/panel";
+import { listCredits, listFinanceAccounts } from "@/lib/panel";
 import { creditCycle } from "@/lib/credit-cycle";
 import { CreditsBoard } from "@/components/credits-board";
 
@@ -30,10 +30,11 @@ export default async function CreditsPage() {
 
   return (
     <CreditsBoard
-      today={localKey(new Date())}
+      today={istanbulDateKey()}
       accounts={accounts.map((item) => ({ id: item.id, name: item.name, currency: item.currency }))}
       credits={credits.map((item) => {
         const cycle = creditCycle(item.periodKurus, item.remainingKurus);
+        const closed = item.remainingKurus <= 0 || cycle.months <= 0;
         return {
         id: item.id,
         name: item.name,
@@ -55,7 +56,8 @@ export default async function CreditsPage() {
         accountId: item.accountId,
         note: item.note,
         lastPaymentId: item.lastPaymentId,
-        closed: item.remainingKurus <= 0 || cycle.months <= 0,
+        closed,
+        overdueDays: overdueDays(item.nextDue, closed),
       };
       })}
     />
@@ -64,4 +66,22 @@ export default async function CreditsPage() {
 
 function formatAmount(kurus: number) {
   return new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(kurus / 100);
+}
+
+function istanbulDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Istanbul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function overdueDays(nextDue: string, closed: boolean) {
+  if (closed) return null;
+  const today = istanbulDateKey();
+  if (nextDue >= today) return null;
+  const from = Date.UTC(Number(nextDue.slice(0, 4)), Number(nextDue.slice(5, 7)) - 1, Number(nextDue.slice(8, 10)));
+  const to = Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)));
+  return Math.round((to - from) / 86_400_000);
 }
