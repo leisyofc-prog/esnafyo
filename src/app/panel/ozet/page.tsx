@@ -2,7 +2,7 @@ import { connection } from "next/server";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { formatMoney } from "@/lib/panel";
-import { buildMonthlyKasaSummary, parseSummaryMonth, type DailyBalancePoint, type MonthlySummaryCategory } from "@/lib/monthly-summary";
+import { buildMonthlyKasaSummary, parseSummaryMonth, type DailyBalancePoint, type MonthlyAsgariLine, type MonthlyAsgariSummary, type MonthlySummaryCategory } from "@/lib/monthly-summary";
 
 export const instant = false;
 
@@ -47,6 +47,8 @@ export default async function MonthlySummaryPage({ searchParams }: { searchParam
           <button className="h-10 rounded-lg border border-[#e4e7ec] px-3 text-[13px] font-semibold">Göster</button>
         </form>
       </section>
+
+      <AsgariCard label={summary.label} asgari={summary.asgari} />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Stat label="Kasa geliri" value={formatMoney(summary.incomeKurus)} tone="text-[#16a34a]" />
@@ -201,3 +203,61 @@ function BalanceTrend({ points }: { points: DailyBalancePoint[] }) {
     </div>
   );
 }
+
+const asgariStatusLabel = { odendi: "Ödendi", kismen: "Kısmen ödendi", odenmedi: "Ödenmedi" } as const;
+const asgariStatusClass = {
+  odendi: "bg-[#ecfdf3] text-[#15803d]",
+  kismen: "bg-[#fff8f1] text-[#c2410c]",
+  odenmedi: "bg-[#fff1f1] text-[#dc2626]",
+} as const;
+
+function AsgariCard({ label, asgari }: { label: string; asgari: MonthlyAsgariSummary }) {
+  return (
+    <section className="rounded-xl border border-[#fed7aa] bg-[#fff7ed] p-4">
+      <h3 className="text-[15px] font-semibold">Bu ay ödenmesi gereken toplam asgari</h3>
+      <p className="mt-1 text-[13px] text-[#9a3412]">{label} içinde vadesi gelen ve daha önce ödenmeyen açık krediler.</p>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-[12px] text-[#98a2b3]">Toplam asgari</p>
+          <p className="mt-1 text-[22px] font-semibold text-[#c2410c]">{formatMoney(asgari.dueKurus)}</p>
+        </div>
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-[12px] text-[#98a2b3]">Bu ay ödenen</p>
+          <p className="mt-1 text-[22px] font-semibold text-[#16a34a]">{formatMoney(asgari.paidKurus)}</p>
+        </div>
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-[12px] text-[#98a2b3]">Kalan</p>
+          <p className={`mt-1 text-[22px] font-semibold ${asgari.remainingKurus > 0 ? "text-[#dc2626]" : "text-[#15803d]"}`}>{formatMoney(asgari.remainingKurus)}</p>
+        </div>
+      </div>
+      {asgari.items.length === 0 ? (
+        <p className="mt-4 text-[13px] text-[#9a3412]">Bu ay ödenecek açık kredi yok.</p>
+      ) : (
+        <ul className="mt-4 divide-y divide-[#fed7aa] overflow-hidden rounded-xl border border-[#fed7aa] bg-white">
+          {asgari.items.map((item) => (
+            <AsgariRow key={item.id} item={item} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AsgariRow({ item }: { item: MonthlyAsgariLine }) {
+  return (
+    <li className="flex flex-wrap items-start justify-between gap-2 px-3 py-2.5 text-[13px]">
+      <div className="min-w-0">
+        <p className="font-semibold">{item.name}</p>
+        <p className="text-[12px] text-[#98a2b3]">
+          Vade {formatDate(item.due)}
+          {item.overdueDays ? ` · ${item.overdueDays} gündür ödenmiyor` : ""}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">{formatMoney(item.minimumKurus)}</span>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${asgariStatusClass[item.status]}`}>{asgariStatusLabel[item.status]}</span>
+      </div>
+    </li>
+  );
+}
+
