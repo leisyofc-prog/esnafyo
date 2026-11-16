@@ -1,6 +1,6 @@
 import { creditCycle } from "@/lib/credit-cycle";
 import { query } from "@/lib/db";
-import { listCredits, listFinanceAccounts } from "@/lib/panel";
+import { listCredits, listFinanceAccounts, type Credit } from "@/lib/panel";
 
 const MONTHS = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
 
@@ -34,6 +34,27 @@ export type DailyBalancePoint = {
   balanceKurus: number;
 };
 
+export type MonthlyAsgariStatus = "odendi" | "kismen" | "odenmedi";
+
+export type MonthlyAsgariLine = {
+  id: string;
+  name: string;
+  due: string;
+  minimumKurus: number;
+  paidKurus: number;
+  remainingKurus: number;
+  status: MonthlyAsgariStatus;
+  overdueDays: number | null;
+  currency: string;
+};
+
+export type MonthlyAsgariSummary = {
+  dueKurus: number;
+  paidKurus: number;
+  remainingKurus: number;
+  items: MonthlyAsgariLine[];
+};
+
 export type MonthlyKasaSummary = {
   key: string;
   label: string;
@@ -49,6 +70,7 @@ export type MonthlyKasaSummary = {
   overdueCredits: MonthlyCreditItem[];
   dueThisMonth: MonthlyCreditItem[];
   dailyBalances: DailyBalancePoint[];
+  asgari: MonthlyAsgariSummary;
 };
 
 export function istanbulDateKey(date = new Date()) {
@@ -107,10 +129,86 @@ function lastDayOfMonth(year: number, month: number) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-export async function buildMonthlyKasaSummary(userId: string, year: number, month: number): Promise<MonthlyKasaSummary> {
+function monthBounds(year: number, month: number) {
   const key = `${year}-${String(month).padStart(2, "0")}`;
-  const startKey = `${key}-01`;
-  const endKey = `${key}-${String(lastDayOfMonth(year, month)).padStart(2, "0")}`;
+  return {
+    key,
+    startKey: `${key}-01`,
+    endKey: `${key}-${String(lastDayOfMonth(year, month)).padStart(2, "0")}`,
+  };
+}
+
+export function creditAsgariKurus(credit: { minimumKurus: number | null; periodKurus: number; remainingKurus: number }) {
+  const stored = credit.minimumKurus;
+  if (stored != null && stored > 0) return Math.min(stored, Math.max(0, credit.remainingKurus));
+  return creditCycle(credit.periodKurus, credit.remainingKurus).minimum;
+}
+
+export function buildMonthlyAsgariSummary(
+  credits: Credit[],
+  payments: { creditId: string | null; amountKurus: number }[],
+  endKey: string,
+  today: string,
+): MonthlyAsgariSummary {
+  const paidByCredit = new Map<string, number>();
+  for (const payment of payments) {
+    if (!payment.creditId) continue;
+    paidByCredit.set(payment.creditId, (paidByCredit.get(payment.creditId) ?? 0) + payment.amountKurus);
+  }
+
+  const items: MonthlyAsgariLine[] = [];
+  for (const credit of credits) {
+    if (isClosedCredit(credit.remainingKurus, credit.periodKurus)) continue;
+    if (credit.nextDue > endKey) continue;
+    const minimumKurus = creditAsgariKurus(credit);
+    if (minimumKurus <= 0) continue;
+    const paidKurus = Math.min(paidByCredit.get(credit.id) ?? 0, minimumKurus);
+    const remainingKurus = Math.max(0, minimumKurus - paidKurus);
+    items.push({
+      id: credit.id,
+      name: credit.name,
+      due: credit.nextDue,
+      minimumKurus,
+      paidKurus,
+      remainingKurus,
+      status: paidKurus >= minimumKurus ? "odendi" : paidKurus > 0 ? "kismen" : "odenmedi",
+      overdueDays: overdueDays(credit.nextDue, false, today),
+      currency: credit.currency,
+    });
+  }
+  items.sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name, "tr"));
+  return {
+    dueKurus: items.reduce((sum, item) => sum + item.minimumKurus, 0),
+    paidKurus: items.reduce((sum, item) => sum + item.paidKurus, 0),
+    remainingKurus: items.reduce((sum, item) => sum + item.remainingKurus, 0),
+    items,
+  };
+}
+
+export async function loadMonthlyAsgariSummary(userId: string, year: number, month: number) {
+  const { startKey, endKey } = monthBounds(year, month);
+  const today = istanbulDateKey();
+  const [credits, paymentRows] = await Promise.all([
+    listCredits(userId),
+    query<{ credit_id: string | null; amount_kurus: number | string }>(
+      `select credit_id, amount_kurus
+       from ledger
+       where user_id = $1
+         and credit_payment in ('taksit', 'asgari')
+         and happened_on >= $2 and happened_on <= $3`,
+      [userId, startKey, endKey],
+    ),
+  ]);
+  return buildMonthlyAsgariSummary(
+    credits,
+    paymentRows.map((row) => ({ creditId: row.credit_id, amountKurus: Number(row.amount_kurus) })),
+    endKey,
+    today,
+  );
+}
+
+export async function buildMonthlyKasaSummary(userId: string, year: number, month: number): Promise<MonthlyKasaSummary> {
+  const { key, startKey, endKey } = monthBounds(year, month);
   const today = istanbulDateKey();
   const trendEnd = today.startsWith(key) ? today : endKey;
 
@@ -139,11 +237,12 @@ export async function buildMonthlyKasaSummary(userId: string, year: number, mont
       amount_kurus: number | string;
       happened_on: string | Date;
       credit_payment: string;
+      credit_id: string | null;
       credit_name: string | null;
       account_name: string | null;
       currency: string | null;
     }>(
-      `select ledger.id, ledger.title, ledger.amount_kurus, ledger.happened_on, ledger.credit_payment,
+      `select ledger.id, ledger.title, ledger.amount_kurus, ledger.happened_on, ledger.credit_payment, ledger.credit_id,
               credits.name as credit_name, finance_accounts.name as account_name, finance_accounts.currency
        from ledger
        left join credits on credits.id = ledger.credit_id
@@ -230,6 +329,13 @@ export async function buildMonthlyKasaSummary(userId: string, year: number, mont
     else if (credit.nextDue >= today && credit.nextDue >= startKey && credit.nextDue <= endKey) dueThisMonth.push(item);
   }
 
+  const asgari = buildMonthlyAsgariSummary(
+    credits,
+    paymentRows.map((row) => ({ creditId: row.credit_id, amountKurus: Number(row.amount_kurus) })),
+    endKey,
+    today,
+  );
+
   return {
     key,
     label: `${MONTHS[month - 1]} ${year}`,
@@ -245,5 +351,6 @@ export async function buildMonthlyKasaSummary(userId: string, year: number, mont
     overdueCredits,
     dueThisMonth,
     dailyBalances,
+    asgari,
   };
 }
