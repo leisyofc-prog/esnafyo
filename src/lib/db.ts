@@ -442,4 +442,14 @@ export async function ensureSchema() {
       status text not null
     )
   `);
+  await query(`
+    create table if not exists stored_files (
+      id text primary key,
+      owner text not null references users(id) on delete cascade,
+      mime text not null,
+      size integer not null,
+      data bytea not null,
+      created_at timestamptz not null default now()
+    )
+  `);
 }
