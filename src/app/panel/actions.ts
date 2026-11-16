@@ -5,14 +5,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
-import { MAX_STORED_FILE_BYTES, customerPhotoFileId, deleteStoredFile, putStoredFile, shopLogoFileId } from "@/lib/stored-files";
+import { MAX_STORED_FILE_BYTES, customerPhotoFileId, deleteStoredFile, putStoredFile, shopCoverFileId, shopLogoFileId } from "@/lib/stored-files";
 import { currencies, normalizeCurrency } from "@/lib/currencies";
 import { masrafCategories } from "@/lib/masraf-categories";
 import { requireFeature } from "@/lib/plan-guard";
 import { site } from "@/content/site";
 import { creditCycle } from "@/lib/credit-cycle";
-import { matchOrCreateCustomer, parseMoney, parseSignedMoney } from "@/lib/panel";
+import { allocatePublicSlug, matchOrCreateCustomer, parseMoney, parseSignedMoney, slugify } from "@/lib/panel";
 import { writeActivity } from "@/lib/activity";
+import { isReservedSlug, normalizeHttpUrl, normalizeThemeColor } from "@/lib/shop-site";
 
 async function userId() {
   const user = await getCurrentUser();
@@ -23,6 +24,15 @@ async function userId() {
 function refresh(path: string) {
   revalidatePath(path);
   revalidatePath("/panel");
+}
+
+async function refreshShop(userId: string) {
+  const rows = await query<{ public_slug: string }>("select public_slug from shop_settings where user_id = $1", [userId]);
+  const slug = rows[0]?.public_slug;
+  if (!slug) return;
+  revalidatePath(`/d/${slug}`);
+  revalidatePath(`/api/d/${slug}/logo`);
+  revalidatePath(`/api/d/${slug}/kapak`);
 }
 
 function record(userId: string, area: string, action: string, detail: string) {
@@ -231,18 +241,92 @@ export async function addStaff(formData: FormData) {
 
 export async function saveSite(formData: FormData) {
   const id = await userId();
+  const current = await query<{ public_slug: string; logo_path: string; cover_path: string }>(
+    "select public_slug, logo_path, cover_path from shop_settings where user_id = $1",
+    [id],
+  );
+  if (!current[0]) return;
+  const requestedSlug = slugify(String(formData.get("slug") ?? "") || current[0].public_slug);
+  if (isReservedSlug(requestedSlug)) return;
+  const publicSlug = await allocatePublicSlug(requestedSlug, id);
+  const logo = formData.get("logo");
+  let logoPath = current[0].logo_path;
+  if (logo instanceof File && logo.size > 0 && ["image/jpeg", "image/png", "image/webp"].includes(logo.type) && logo.size <= MAX_STORED_FILE_BYTES) {
+    const ext = logo.type === "image/png" ? "png" : logo.type === "image/webp" ? "webp" : "jpg";
+    const saved = await putStoredFile(shopLogoFileId(id), id, logo.type, new Uint8Array(await logo.arrayBuffer()));
+    if (saved.ok) logoPath = `logo.${ext}`;
+  }
+  const cover = formData.get("cover");
+  let coverPath = current[0].cover_path;
+  if (formData.get("remove_cover") === "on") {
+    await deleteStoredFile(shopCoverFileId(id), id);
+    coverPath = "";
+  } else if (cover instanceof File && cover.size > 0 && ["image/jpeg", "image/png", "image/webp"].includes(cover.type) && cover.size <= MAX_STORED_FILE_BYTES) {
+    const ext = cover.type === "image/png" ? "png" : cover.type === "image/webp" ? "webp" : "jpg";
+    const saved = await putStoredFile(shopCoverFileId(id), id, cover.type, new Uint8Array(await cover.arrayBuffer()));
+    if (saved.ok) coverPath = `kapak.${ext}`;
+  }
   await query(
-    "update shop_settings set headline = $1, about = $2, price_note = $3, campaign = $4 where user_id = $5",
+    `update shop_settings set
+        headline = $1, about = $2, price_note = $3, campaign = $4, public_slug = $5, site_enabled = $6,
+        theme_color = $7, seo_title = $8, seo_description = $9, address = $10, public_phone = $11,
+        whatsapp_number = $12, instagram_url = $13, facebook_url = $14, open_time = $15, close_time = $16,
+        closed_days = $17, logo_path = $18, cover_path = $19
+     where user_id = $20`,
     [
-      String(formData.get("headline") ?? ""),
-      String(formData.get("about") ?? ""),
-      String(formData.get("price") ?? ""),
-      String(formData.get("campaign") ?? ""),
+      String(formData.get("headline") ?? "").trim(),
+      String(formData.get("about") ?? "").trim(),
+      String(formData.get("price") ?? "").trim(),
+      String(formData.get("campaign") ?? "").trim(),
+      publicSlug,
+      formData.get("site_enabled") === "on",
+      normalizeThemeColor(String(formData.get("theme_color") ?? "")),
+      String(formData.get("seo_title") ?? "").trim().slice(0, 80),
+      String(formData.get("seo_description") ?? "").trim().slice(0, 200),
+      String(formData.get("address") ?? "").trim(),
+      String(formData.get("public_phone") ?? "").trim(),
+      String(formData.get("whatsapp") ?? "").trim(),
+      normalizeHttpUrl(String(formData.get("instagram") ?? "")),
+      normalizeHttpUrl(String(formData.get("facebook") ?? "")),
+      String(formData.get("open") ?? "09:00"),
+      String(formData.get("close") ?? "19:00"),
+      String(formData.get("closed") ?? "").trim(),
+      logoPath,
+      coverPath,
       id,
     ],
   );
+  await record(id, "site", "Dükkân sitesini güncelledi", publicSlug);
   refresh("/panel/site");
+  await refreshShop(id);
 }
+
+export async function addShopProduct(formData: FormData) {
+  const id = await userId();
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) return;
+  const rawPrice = String(formData.get("price") ?? "").trim();
+  const amount = rawPrice ? parseMoney(rawPrice) : 0;
+  if (rawPrice && amount == null) return;
+  const priceKurus = amount ?? 0;
+  const priceLabel = rawPrice || "";
+  await query(
+    "insert into products (id, user_id, name, price_label, price_kurus, vat_rate, in_stock, show_on_site) values ($1,$2,$3,$4,$5,20,true,true)",
+    [randomUUID(), id, name, priceLabel, priceKurus],
+  );
+  refresh("/panel/site");
+  await refreshShop(id);
+}
+
+export async function toggleShopProduct(formData: FormData) {
+  const id = await userId();
+  const productId = String(formData.get("id") ?? "");
+  if (!productId) return;
+  await query("update products set show_on_site = not show_on_site where id = $1 and user_id = $2", [productId, id]);
+  refresh("/panel/site");
+  await refreshShop(id);
+}
+
 
 export async function addFinanceAccount(formData: FormData) {
   const id = await requireFeature("hesaplar");
@@ -664,6 +748,8 @@ export async function saveWorkplace(formData: FormData) {
     if (saved.ok) await query("update shop_settings set logo_path = $1 where user_id = $2", [filename, id]);
   }
   refresh("/panel/hesap");
+  refresh("/panel/site");
+  await refreshShop(id);
 }
 
 export async function saveSettings(formData: FormData) {
