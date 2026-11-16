@@ -26,6 +26,7 @@ export type CreditItem = {
   minimumLabel: string;
   lastPaymentId: string | null;
   closed: boolean;
+  overdueDays: number | null;
 };
 
 type AccountOption = { id: string; name: string; currency: string };
@@ -128,6 +129,11 @@ export function CreditsBoard({ credits, accounts, today }: { credits: CreditItem
                     <p className="font-semibold">{item.name}</p>
                     <p className="mt-1 text-[#475467]">Kalan borç <span className="font-semibold text-[#dc2626]">{item.remainingLabel}</span> · {item.installmentLabel} · {item.scheduleLabel}</p>
                     <p className="mt-1 text-[#98a2b3]">Sıradaki ödeme {item.nextLabel} · {item.accountName}{item.minimumLabel ? ` · Asgari ${item.minimumLabel} (dönem borcunun %20’si)` : ""}</p>
+                    {item.overdueDays ? (
+                      <p className="mt-1">
+                        <span className="rounded-full bg-[#fff1f1] px-2 py-0.5 text-[11px] font-semibold text-[#dc2626]">{item.overdueDays} gündür ödenmiyor</span>
+                      </p>
+                    ) : null}
                     {item.note ? <p className="mt-1 text-[#98a2b3]">{item.note}</p> : null}
                   </div>
                   {item.closed ? <span className="text-[12px] font-semibold text-[#15803d]">Kapandı</span> : (
