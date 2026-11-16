@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { addCredit, deleteCredit, payCredit, payMinimum, updateCredit } from "@/app/panel/actions";
+import { addCredit, deleteCredit, deleteLedger, payCredit, payMinimum, updateCredit } from "@/app/panel/actions";
 
 export type CreditItem = {
   id: string;
@@ -24,6 +24,7 @@ export type CreditItem = {
   note: string;
   installmentAmount: string;
   minimumLabel: string;
+  lastPaymentId: string | null;
   closed: boolean;
 };
 
@@ -145,6 +146,12 @@ export function CreditsBoard({ credits, accounts, today }: { credits: CreditItem
                 </div>
                 <div className="mt-2 flex gap-3">
                   <button type="button" onClick={() => setEditing(editing === item.id ? null : item.id)} className="text-[12px] font-semibold text-[#1c2430]">Düzenle</button>
+                  {item.lastPaymentId ? (
+                    <form action={deleteLedger}>
+                      <input type="hidden" name="id" value={item.lastPaymentId} />
+                      <button className="text-[12px] font-semibold text-[#98a2b3]">Ödemeyi geri al</button>
+                    </form>
+                  ) : null}
                   <form action={deleteCredit}>
                     <input type="hidden" name="id" value={item.id} />
                     <button className="text-[12px] font-semibold text-[#98a2b3]">Sil</button>
