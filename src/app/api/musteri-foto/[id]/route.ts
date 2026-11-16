@@ -1,24 +1,25 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
+import { customerPhotoFileId, getStoredFile } from "@/lib/stored-files";
 
-const types: Record<string, string> = {
-  jpg: "image/jpeg",
-  png: "image/png",
-  webp: "image/webp",
-};
+export const instant = false;
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
-  if (!user) return new Response(null, { status: 401 });
+  if (!user) return NextResponse.json({ error: "Yetkisiz." }, { status: 401 });
   const { id } = await params;
-  const rows = await query<{ image_path: string }>("select image_path from customers where id = $1 and user_id = $2", [id, user.id]);
-  const filename = rows[0]?.image_path ?? "";
-  if (!/^[0-9a-f-]+\.(jpg|png|webp)$/i.test(filename)) return new Response(null, { status: 404 });
-  const file = path.join(process.cwd(), ".data", "customer-photos", user.id, filename);
-  const bytes = await readFile(file).catch(() => null);
-  if (!bytes) return new Response(null, { status: 404 });
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  return new Response(bytes, { headers: { "Content-Type": types[ext] ?? "application/octet-stream", "Cache-Control": "private, no-store" } });
+  const [customer] = await query<{ image_path: string }>("select image_path from customers where id = $1 and user_id = $2", [id, user.id]);
+  if (!customer) return NextResponse.json({ error: "Müşteri bulunamadı." }, { status: 404 });
+  const filename = customer.image_path || "";
+  if (!new RegExp(`^${id}\.(jpg|png|webp)$`, "i").test(filename)) return NextResponse.json({ error: "Dosya bulunamadı." }, { status: 404 });
+  const file = await getStoredFile(customerPhotoFileId(user.id, id), user.id);
+  if (!file) return NextResponse.json({ error: "Dosya bulunamadı." }, { status: 404 });
+  return new NextResponse(new Uint8Array(file.data), {
+    headers: {
+      "Content-Type": file.mime,
+      "Content-Length": String(file.size),
+      "Cache-Control": "private, no-store",
+    },
+  });
 }
