@@ -1,0 +1,17 @@
+export const masrafCategories = [
+  "Aidat",
+  "Elektrik",
+  "Isınma",
+  "İletişim",
+  "Kırtasiye",
+  "Kira",
+  "Su",
+  "Temizlik",
+  "Kiralama",
+  "Yakıt",
+  "Vergi",
+  "Banka masrafları",
+  "Faiz",
+  "KDV",
+  "Mali müşavir",
+];
